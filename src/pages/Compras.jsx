@@ -6,6 +6,7 @@ export default function Compras() {
   const [produtos, setProdutos] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(false)
+  const [editandoCompra, setEditandoCompra] = useState(null)
   const [itens, setItens] = useState([])
   const [fornecedor, setFornecedor] = useState('')
   const [observacao, setObservacao] = useState('')
@@ -21,10 +22,7 @@ export default function Compras() {
   async function loadAll() {
     setLoading(true)
     const [{ data: c }, { data: p }] = await Promise.all([
-      supabase.from('compras')
-        .select('*, itens_compra(quantidade, custo_unitario, produto_id, produtos(nome))')
-        .order('created_at', { ascending: false })
-        .limit(50),
+      supabase.from('compras').select('*, itens_compra(quantidade, custo_unitario, produto_id, produtos(nome))').order('created_at', { ascending: false }).limit(50),
       supabase.from('produtos').select('*').eq('ativo', true).order('nome'),
     ])
     setCompras(c || [])
@@ -32,10 +30,29 @@ export default function Compras() {
     setLoading(false)
   }
 
-  function abrirModal() {
+  function abrirNovaCompra() {
+    setEditandoCompra(null)
     setItens([])
     setFornecedor('')
     setObservacao('')
+    setProdutoSel('')
+    setQtd(1)
+    setCusto('')
+    setModal(true)
+  }
+
+  function abrirEditar(compra) {
+    setEditandoCompra(compra)
+    setFornecedor(compra.fornecedor || '')
+    setObservacao(compra.observacao || '')
+    const itensExistentes = compra.itens_compra.map(i => ({
+      produto_id: i.produto_id,
+      nome: i.produtos?.nome || '—',
+      quantidade: i.quantidade,
+      custo_unitario: i.custo_unitario,
+      estoque_atual: produtos.find(p => p.id === i.produto_id)?.estoque_atual || 0,
+    }))
+    setItens(itensExistentes)
     setProdutoSel('')
     setQtd(1)
     setCusto('')
@@ -58,100 +75,104 @@ export default function Compras() {
 
     const jaNoLista = itens.find(i => i.produto_id === produtoSel)
     if (jaNoLista) {
-      setItens(prev => prev.map(i => i.produto_id === produtoSel
-        ? { ...i, quantidade: i.quantidade + Number(qtd) }
-        : i
-      ))
+      setItens(prev => prev.map(i => i.produto_id === produtoSel ? { ...i, quantidade: i.quantidade + Number(qtd) } : i))
     } else {
-      setItens(prev => [...prev, {
-        produto_id: produtoSel,
-        nome: produto.nome,
-        quantidade: Number(qtd),
-        custo_unitario: Number(custo),
-        estoque_atual: produto.estoque_atual,
-      }])
+      setItens(prev => [...prev, { produto_id: produtoSel, nome: produto.nome, quantidade: Number(qtd), custo_unitario: Number(custo), estoque_atual: produto.estoque_atual }])
     }
     setProdutoSel('')
     setQtd(1)
     setCusto('')
   }
 
-  function removerItem(id) {
-    setItens(prev => prev.filter(i => i.produto_id !== id))
-  }
+  function removerItem(id) { setItens(prev => prev.filter(i => i.produto_id !== id)) }
 
   const totalCompra = itens.reduce((s, i) => s + i.quantidade * i.custo_unitario, 0)
 
-  async function registrarCompra() {
+  async function salvarCompra() {
     if (itens.length === 0) return showMsg('Adicione pelo menos um produto', 'danger')
     setSalvando(true)
 
     try {
-      // Criar compra
-      const { data: compra, error: errCompra } = await supabase
-        .from('compras')
-        .insert({ fornecedor: fornecedor.trim() || 'Não informado', total: totalCompra, observacao })
-        .select()
-        .single()
+      if (editandoCompra) {
+        // --- EDITAR ---
+        // 1. Reverter estoque dos itens originais
+        for (const item of editandoCompra.itens_compra) {
+          const prod = produtos.find(p => p.id === item.produto_id)
+          if (prod) {
+            await supabase.from('produtos').update({ estoque_atual: prod.estoque_atual - item.quantidade }).eq('id', item.produto_id)
+          }
+        }
+        // 2. Deletar itens antigos e movimentações
+        await supabase.from('itens_compra').delete().eq('compra_id', editandoCompra.id)
+        await supabase.from('movimentacoes').delete().eq('referencia_id', editandoCompra.id)
+        // 3. Atualizar compra
+        await supabase.from('compras').update({ fornecedor: fornecedor.trim() || 'Não informado', total: totalCompra, observacao }).eq('id', editandoCompra.id)
+        // 4. Inserir novos itens
+        await supabase.from('itens_compra').insert(itens.map(i => ({ compra_id: editandoCompra.id, produto_id: i.produto_id, quantidade: i.quantidade, custo_unitario: i.custo_unitario })))
+        // 5. Atualizar estoque com novos itens
+        for (const item of itens) {
+          const prod = produtos.find(p => p.id === item.produto_id)
+          const itemOriginal = editandoCompra.itens_compra.find(i => i.produto_id === item.produto_id)
+          const estoqueBase = (prod?.estoque_atual || 0) - (itemOriginal?.quantidade || 0)
+          await supabase.from('produtos').update({ estoque_atual: estoqueBase + item.quantidade, custo: item.custo_unitario }).eq('id', item.produto_id)
+          await supabase.from('movimentacoes').insert({ produto_id: item.produto_id, tipo: 'entrada', motivo: 'compra', quantidade: item.quantidade, referencia_id: editandoCompra.id })
+        }
+        // 6. Atualizar financeiro
+        await supabase.from('financeiro').update({ valor: totalCompra, descricao: `Compra: ${itens.map(i => i.nome).join(', ')} · Fornecedor: ${fornecedor || 'Não informado'}` }).eq('referencia_id', editandoCompra.id)
+        showMsg('Compra atualizada!', 'success')
 
-      if (errCompra) throw errCompra
-
-      // Inserir itens
-      const itemsInsert = itens.map(i => ({
-        compra_id: compra.id,
-        produto_id: i.produto_id,
-        quantidade: i.quantidade,
-        custo_unitario: i.custo_unitario,
-      }))
-      await supabase.from('itens_compra').insert(itemsInsert)
-
-      // Atualizar estoque e movimentações
-      for (const item of itens) {
-        const prod = produtos.find(p => p.id === item.produto_id)
-        await supabase.from('produtos')
-          .update({
-            estoque_atual: prod.estoque_atual + item.quantidade,
-            custo: item.custo_unitario, // atualiza custo unitário
-          })
-          .eq('id', item.produto_id)
-
-        await supabase.from('movimentacoes').insert({
-          produto_id: item.produto_id,
-          tipo: 'entrada',
-          motivo: 'compra',
-          quantidade: item.quantidade,
-          referencia_id: compra.id,
-          observacao: fornecedor || null,
-        })
+      } else {
+        // --- NOVA COMPRA ---
+        const { data: compra, error: errCompra } = await supabase.from('compras').insert({ fornecedor: fornecedor.trim() || 'Não informado', total: totalCompra, observacao }).select().single()
+        if (errCompra) throw errCompra
+        await supabase.from('itens_compra').insert(itens.map(i => ({ compra_id: compra.id, produto_id: i.produto_id, quantidade: i.quantidade, custo_unitario: i.custo_unitario })))
+        for (const item of itens) {
+          const prod = produtos.find(p => p.id === item.produto_id)
+          await supabase.from('produtos').update({ estoque_atual: prod.estoque_atual + item.quantidade, custo: item.custo_unitario }).eq('id', item.produto_id)
+          await supabase.from('movimentacoes').insert({ produto_id: item.produto_id, tipo: 'entrada', motivo: 'compra', quantidade: item.quantidade, referencia_id: compra.id, observacao: fornecedor || null })
+        }
+        await supabase.from('financeiro').insert({ tipo: 'saida', categoria: 'compra', descricao: `Compra: ${itens.map(i => i.nome).join(', ')} · Fornecedor: ${fornecedor || 'Não informado'}`, valor: totalCompra, referencia_id: compra.id })
+        showMsg('Compra registrada! Estoque atualizado. 📦', 'success')
       }
 
-      // Lançamento financeiro (saída)
-      await supabase.from('financeiro').insert({
-        tipo: 'saida',
-        categoria: 'compra',
-        descricao: `Compra: ${itens.map(i => i.nome).join(', ')} · Fornecedor: ${fornecedor || 'Não informado'}`,
-        valor: totalCompra,
-        referencia_id: compra.id,
-      })
-
-      showMsg('Compra registrada! Estoque atualizado. 📦', 'success')
       setModal(false)
       loadAll()
     } catch (e) {
-      showMsg('Erro ao registrar compra: ' + e.message, 'danger')
+      showMsg('Erro: ' + e.message, 'danger')
     }
     setSalvando(false)
   }
 
-  function showMsg(text, type = 'success') {
-    setMsg({ text, type })
-    setTimeout(() => setMsg(null), 4000)
+  async function excluirCompra(compra, e) {
+    e.stopPropagation()
+    if (!confirm('Excluir esta compra? O estoque dos produtos será descontado.')) return
+
+    try {
+      // Reverter estoque
+      for (const item of compra.itens_compra) {
+        const prod = produtos.find(p => p.id === item.produto_id)
+        if (prod) {
+          const novoEstoque = Math.max(0, prod.estoque_atual - item.quantidade)
+          await supabase.from('produtos').update({ estoque_atual: novoEstoque }).eq('id', item.produto_id)
+        }
+      }
+      // Deletar financeiro e movimentações
+      await supabase.from('financeiro').delete().eq('referencia_id', compra.id)
+      await supabase.from('movimentacoes').delete().eq('referencia_id', compra.id)
+      // Deletar compra (itens em cascade)
+      await supabase.from('compras').delete().eq('id', compra.id)
+      showMsg('Compra excluída e estoque ajustado.', 'success')
+      loadAll()
+    } catch (e) {
+      showMsg('Erro ao excluir: ' + e.message, 'danger')
+    }
   }
+
+  function showMsg(text, type = 'success') { setMsg({ text, type }); setTimeout(() => setMsg(null), 4000) }
 
   const fmt = (v) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
 
-  // Totais do mês
-  const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0,0,0,0)
+  const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0, 0, 0, 0)
   const comprasMes = compras.filter(c => new Date(c.created_at) >= inicioMes)
   const totalMes = comprasMes.reduce((s, c) => s + Number(c.total), 0)
 
@@ -164,47 +185,31 @@ export default function Compras() {
           <h2 className="page-title">Compras</h2>
           <p className="page-subtitle">{comprasMes.length} compra(s) este mês · {fmt(totalMes)} investido</p>
         </div>
-        <button className="btn btn-primary" onClick={abrirModal}>+ Registrar Compra</button>
+        <button className="btn btn-primary" onClick={abrirNovaCompra}>+ Registrar Compra</button>
       </div>
 
-      {loading ? (
-        <p style={{ color: 'var(--texto-leve)' }}>Carregando...</p>
-      ) : compras.length === 0 ? (
-        <div className="card empty-state">
-          <div className="icon">📦</div>
-          <h3>Nenhuma compra registrada</h3>
-          <p>Registre a primeira compra de mercadoria clicando acima</p>
-        </div>
+      {loading ? <p style={{ color: 'var(--texto-leve)' }}>Carregando...</p> : compras.length === 0 ? (
+        <div className="card empty-state"><div className="icon">📦</div><h3>Nenhuma compra registrada</h3><p>Registre a primeira compra de mercadoria clicando acima</p></div>
       ) : (
         <div className="table-wrapper">
           <table>
             <thead>
-              <tr>
-                <th>Data</th>
-                <th>Fornecedor</th>
-                <th>Produtos</th>
-                <th>Qtd. Itens</th>
-                <th>Total</th>
-                <th>Obs.</th>
-              </tr>
+              <tr><th>Data</th><th>Fornecedor</th><th>Produtos</th><th>Total</th><th>Obs.</th><th style={{ textAlign: 'right' }}>Ações</th></tr>
             </thead>
             <tbody>
               {compras.map(c => (
-                <tr key={c.id} style={{ cursor: 'pointer' }} onClick={() => setDetalhe(c)}>
-                  <td style={{ whiteSpace: 'nowrap', color: 'var(--texto-leve)', fontSize: 12 }}>
-                    {new Date(c.created_at).toLocaleDateString('pt-BR')}
-                  </td>
+                <tr key={c.id} onClick={() => setDetalhe(c)} style={{ cursor: 'pointer' }}>
+                  <td style={{ whiteSpace: 'nowrap', color: 'var(--texto-leve)', fontSize: 12 }}>{new Date(c.created_at).toLocaleDateString('pt-BR')}</td>
                   <td style={{ fontWeight: 500 }}>{c.fornecedor || '—'}</td>
-                  <td style={{ fontSize: 12 }}>
-                    {c.itens_compra?.map(i => (
-                      <span key={i.produto_id} style={{ display: 'block' }}>
-                        {i.quantidade}x {i.produtos?.nome}
-                      </span>
-                    ))}
-                  </td>
-                  <td>{c.itens_compra?.reduce((s, i) => s + i.quantidade, 0)} un</td>
+                  <td style={{ fontSize: 12 }}>{c.itens_compra?.map(i => <span key={i.produto_id} style={{ display: 'block' }}>{i.quantidade}x {i.produtos?.nome}</span>)}</td>
                   <td style={{ fontWeight: 700, color: 'var(--danger)' }}>{fmt(c.total)}</td>
                   <td style={{ fontSize: 12, color: 'var(--texto-leve)' }}>{c.observacao || '—'}</td>
+                  <td onClick={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end' }}>
+                      <button className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 12 }} onClick={(e) => { e.stopPropagation(); abrirEditar(c) }}>✏️ Editar</button>
+                      <button className="btn btn-danger" style={{ padding: '5px 10px', fontSize: 12 }} onClick={(e) => excluirCompra(c, e)}>🗑️ Excluir</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -212,15 +217,20 @@ export default function Compras() {
         </div>
       )}
 
-      {/* Modal Nova Compra */}
+      {/* Modal Nova / Editar Compra */}
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(false)}>
           <div className="modal" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 style={{ fontSize: 22 }}>Registrar Compra</h3>
+              <h3 style={{ fontSize: 22 }}>{editandoCompra ? 'Editar Compra' : 'Registrar Compra'}</h3>
               <button onClick={() => setModal(false)} style={{ background: 'none', fontSize: 20, color: 'var(--texto-leve)' }}>✕</button>
             </div>
             <div className="modal-body">
+              {editandoCompra && (
+                <div className="alert alert-warning">
+                  ✏️ Editando compra de {new Date(editandoCompra.created_at).toLocaleDateString('pt-BR')} — o estoque será recalculado automaticamente.
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Fornecedor</label>
                 <input className="form-input" value={fornecedor} onChange={e => setFornecedor(e.target.value)} placeholder="Nome do fornecedor (opcional)" />
@@ -234,58 +244,37 @@ export default function Compras() {
                     <label className="form-label">Produto</label>
                     <select className="form-input" value={produtoSel} onChange={e => selecionarProduto(e.target.value)}>
                       <option value="">Selecione...</option>
-                      {produtos.map(p => (
-                        <option key={p.id} value={p.id}>{p.nome}</option>
-                      ))}
+                      {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
                     </select>
                   </div>
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label">Qtd</label>
-                    <input className="form-input" type="number" min="1" value={qtd} onChange={e => setQtd(e.target.value)} />
-                  </div>
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label">Custo unit. (R$)</label>
-                    <input className="form-input" type="number" step="0.01" min="0" value={custo} onChange={e => setCusto(e.target.value)} />
-                  </div>
+                  <div className="form-group" style={{ margin: 0 }}><label className="form-label">Qtd</label><input className="form-input" type="number" min="1" value={qtd} onChange={e => setQtd(e.target.value)} /></div>
+                  <div className="form-group" style={{ margin: 0 }}><label className="form-label">Custo unit. (R$)</label><input className="form-input" type="number" step="0.01" min="0" value={custo} onChange={e => setCusto(e.target.value)} /></div>
                   <button className="btn btn-primary" style={{ height: 40 }} onClick={adicionarItem}>+</button>
                 </div>
               </div>
 
-              {/* Lista de itens */}
+              {/* Lista itens */}
               {itens.length > 0 && (
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--texto-leve)', textTransform: 'uppercase', marginBottom: 8 }}>Itens da compra</div>
                   {itens.map(item => (
-                    <div key={item.produto_id} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '10px 14px', background: 'var(--branco)', borderRadius: 8, marginBottom: 6,
-                      border: '1px solid var(--bege-dark)',
-                    }}>
+                    <div key={item.produto_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--branco)', borderRadius: 8, marginBottom: 6, border: '1px solid var(--bege-dark)' }}>
                       <div>
                         <div style={{ fontWeight: 500, fontSize: 13 }}>{item.nome}</div>
                         <div style={{ fontSize: 12, color: 'var(--texto-leve)' }}>
                           {item.quantidade} un × {fmt(item.custo_unitario)}
-                          <span style={{ marginLeft: 6, color: 'var(--verde)', fontWeight: 600 }}>
-                            → estoque: {item.estoque_atual} + {item.quantidade} = {item.estoque_atual + item.quantidade}
-                          </span>
+                          <span style={{ marginLeft: 6, color: 'var(--verde)', fontWeight: 600 }}>→ estoque: {item.estoque_atual} + {item.quantidade} = {item.estoque_atual + item.quantidade}</span>
                         </div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <span style={{ fontWeight: 700, color: 'var(--danger)' }}>
-                          {fmt(item.quantidade * item.custo_unitario)}
-                        </span>
+                        <span style={{ fontWeight: 700, color: 'var(--danger)' }}>{fmt(item.quantidade * item.custo_unitario)}</span>
                         <button onClick={() => removerItem(item.produto_id)} style={{ background: 'none', color: 'var(--danger)', fontSize: 16 }}>✕</button>
                       </div>
                     </div>
                   ))}
-                  <div style={{
-                    marginTop: 8, padding: '12px 14px', background: 'var(--danger-light)', borderRadius: 8,
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  }}>
+                  <div style={{ marginTop: 8, padding: '12px 14px', background: 'var(--danger-light)', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontWeight: 600, fontSize: 14 }}>Total investido</span>
-                    <span style={{ fontWeight: 700, fontSize: 20, fontFamily: 'Cormorant Garamond, serif', color: 'var(--danger)' }}>
-                      {fmt(totalCompra)}
-                    </span>
+                    <span style={{ fontWeight: 700, fontSize: 20, fontFamily: 'Cormorant Garamond, serif', color: 'var(--danger)' }}>{fmt(totalCompra)}</span>
                   </div>
                 </div>
               )}
@@ -297,15 +286,15 @@ export default function Compras() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setModal(false)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={registrarCompra} disabled={salvando || itens.length === 0}>
-                {salvando ? 'Salvando...' : `Confirmar Compra${itens.length > 0 ? ` · ${fmt(totalCompra)}` : ''}`}
+              <button className="btn btn-primary" onClick={salvarCompra} disabled={salvando || itens.length === 0}>
+                {salvando ? 'Salvando...' : editandoCompra ? 'Salvar Alterações' : `Confirmar Compra${itens.length > 0 ? ` · ${fmt(totalCompra)}` : ''}`}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Detalhe compra */}
+      {/* Detalhe */}
       {detalhe && (
         <div className="modal-overlay" onClick={() => setDetalhe(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>

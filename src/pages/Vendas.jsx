@@ -6,6 +6,7 @@ export default function Vendas() {
   const [produtos, setProdutos] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(false)
+  const [editandoVenda, setEditandoVenda] = useState(null) // venda original ao editar
   const [carrinho, setCarrinho] = useState([])
   const [canal, setCanal] = useState('whatsapp')
   const [observacao, setObservacao] = useState('')
@@ -21,10 +22,7 @@ export default function Vendas() {
   async function loadAll() {
     setLoading(true)
     const [{ data: v }, { data: p }] = await Promise.all([
-      supabase.from('vendas')
-        .select('*, itens_venda(quantidade, preco_unitario, produto_id, produtos(nome))')
-        .order('created_at', { ascending: false })
-        .limit(50),
+      supabase.from('vendas').select('*, itens_venda(quantidade, preco_unitario, produto_id, produtos(nome))').order('created_at', { ascending: false }).limit(50),
       supabase.from('produtos').select('*').eq('ativo', true).order('nome'),
     ])
     setVendas(v || [])
@@ -32,10 +30,30 @@ export default function Vendas() {
     setLoading(false)
   }
 
-  function abrirModal() {
+  function abrirNovaVenda() {
+    setEditandoVenda(null)
     setCarrinho([])
     setCanal('whatsapp')
     setObservacao('')
+    setProdutoSel('')
+    setQtd(1)
+    setPreco('')
+    setModal(true)
+  }
+
+  function abrirEditar(venda) {
+    setEditandoVenda(venda)
+    setCanal(venda.canal)
+    setObservacao(venda.observacao || '')
+    // Monta carrinho com os itens existentes
+    const itensCarrinho = venda.itens_venda.map(i => ({
+      produto_id: i.produto_id,
+      nome: i.produtos?.nome || '—',
+      quantidade: i.quantidade,
+      preco_unitario: i.preco_unitario,
+      estoque_atual: (produtos.find(p => p.id === i.produto_id)?.estoque_atual || 0) + i.quantidade, // estoque atual + o que será devolvido
+    }))
+    setCarrinho(itensCarrinho)
     setProdutoSel('')
     setQtd(1)
     setPreco('')
@@ -56,109 +74,115 @@ export default function Vendas() {
     const produto = produtos.find(p => p.id === produtoSel)
     if (!produto) return
 
-    if (produto.estoque_atual < qtd) {
-      return showMsg(`Estoque insuficiente. Disponível: ${produto.estoque_atual}`, 'danger')
-    }
-
+    // Estoque disponível: se editando, soma de volta o que estava na venda original
+    const itemOriginal = editandoVenda?.itens_venda?.find(i => i.produto_id === produtoSel)
+    const estoqueDisponivel = produto.estoque_atual + (itemOriginal?.quantidade || 0)
     const jaNoCarrinho = carrinho.find(i => i.produto_id === produtoSel)
     const totalQtd = (jaNoCarrinho?.quantidade || 0) + Number(qtd)
-    if (totalQtd > produto.estoque_atual) {
-      return showMsg(`Estoque insuficiente para ${totalQtd} unidades. Disponível: ${produto.estoque_atual}`, 'danger')
+
+    if (totalQtd > estoqueDisponivel) {
+      return showMsg(`Estoque insuficiente. Disponível: ${estoqueDisponivel}`, 'danger')
     }
 
     if (jaNoCarrinho) {
-      setCarrinho(c => c.map(i => i.produto_id === produtoSel
-        ? { ...i, quantidade: i.quantidade + Number(qtd) }
-        : i
-      ))
+      setCarrinho(c => c.map(i => i.produto_id === produtoSel ? { ...i, quantidade: i.quantidade + Number(qtd) } : i))
     } else {
-      setCarrinho(c => [...c, {
-        produto_id: produtoSel,
-        nome: produto.nome,
-        quantidade: Number(qtd),
-        preco_unitario: Number(preco),
-        estoque_atual: produto.estoque_atual,
-      }])
+      setCarrinho(c => [...c, { produto_id: produtoSel, nome: produto.nome, quantidade: Number(qtd), preco_unitario: Number(preco), estoque_atual: estoqueDisponivel }])
     }
     setProdutoSel('')
     setQtd(1)
     setPreco('')
   }
 
-  function removerItem(id) {
-    setCarrinho(c => c.filter(i => i.produto_id !== id))
-  }
+  function removerItem(id) { setCarrinho(c => c.filter(i => i.produto_id !== id)) }
 
   const totalCarrinho = carrinho.reduce((s, i) => s + i.quantidade * i.preco_unitario, 0)
 
-  async function registrarVenda() {
+  async function salvarVenda() {
     if (carrinho.length === 0) return showMsg('Adicione pelo menos um produto', 'danger')
     setSalvando(true)
 
     try {
-      // Criar venda
-      const { data: venda, error: errVenda } = await supabase
-        .from('vendas')
-        .insert({ canal, total: totalCarrinho, observacao })
-        .select()
-        .single()
+      if (editandoVenda) {
+        // --- EDITAR ---
+        // 1. Restaurar estoque dos itens originais
+        for (const item of editandoVenda.itens_venda) {
+          const prod = produtos.find(p => p.id === item.produto_id)
+          if (prod) {
+            await supabase.from('produtos').update({ estoque_atual: prod.estoque_atual + item.quantidade }).eq('id', item.produto_id)
+          }
+        }
+        // 2. Deletar itens antigos e movimentações
+        await supabase.from('itens_venda').delete().eq('venda_id', editandoVenda.id)
+        await supabase.from('movimentacoes').delete().eq('referencia_id', editandoVenda.id)
+        // 3. Atualizar venda
+        await supabase.from('vendas').update({ canal, total: totalCarrinho, observacao }).eq('id', editandoVenda.id)
+        // 4. Inserir novos itens
+        await supabase.from('itens_venda').insert(carrinho.map(i => ({ venda_id: editandoVenda.id, produto_id: i.produto_id, quantidade: i.quantidade, preco_unitario: i.preco_unitario })))
+        // 5. Deduzir novo estoque e movimentações
+        for (const item of carrinho) {
+          const prod = produtos.find(p => p.id === item.produto_id)
+          const estoqueAtualizado = (prod?.estoque_atual || 0) + (editandoVenda.itens_venda.find(i => i.produto_id === item.produto_id)?.quantidade || 0)
+          await supabase.from('produtos').update({ estoque_atual: estoqueAtualizado - item.quantidade }).eq('id', item.produto_id)
+          await supabase.from('movimentacoes').insert({ produto_id: item.produto_id, tipo: 'saida', motivo: 'venda', quantidade: item.quantidade, referencia_id: editandoVenda.id })
+        }
+        // 6. Atualizar financeiro
+        await supabase.from('financeiro').update({ valor: totalCarrinho, descricao: `Venda ${carrinho.map(i => i.nome).join(', ')} via ${canal}` }).eq('referencia_id', editandoVenda.id)
+        showMsg('Venda atualizada!', 'success')
 
-      if (errVenda) throw errVenda
-
-      // Inserir itens
-      const itens = carrinho.map(i => ({
-        venda_id: venda.id,
-        produto_id: i.produto_id,
-        quantidade: i.quantidade,
-        preco_unitario: i.preco_unitario,
-      }))
-      await supabase.from('itens_venda').insert(itens)
-
-      // Atualizar estoque e registrar movimentações
-      for (const item of carrinho) {
-        const prod = produtos.find(p => p.id === item.produto_id)
-        await supabase.from('produtos')
-          .update({ estoque_atual: prod.estoque_atual - item.quantidade })
-          .eq('id', item.produto_id)
-
-        await supabase.from('movimentacoes').insert({
-          produto_id: item.produto_id,
-          tipo: 'saida',
-          motivo: 'venda',
-          quantidade: item.quantidade,
-          referencia_id: venda.id,
-        })
+      } else {
+        // --- NOVA VENDA ---
+        const { data: venda, error: errVenda } = await supabase.from('vendas').insert({ canal, total: totalCarrinho, observacao }).select().single()
+        if (errVenda) throw errVenda
+        await supabase.from('itens_venda').insert(carrinho.map(i => ({ venda_id: venda.id, produto_id: i.produto_id, quantidade: i.quantidade, preco_unitario: i.preco_unitario })))
+        for (const item of carrinho) {
+          const prod = produtos.find(p => p.id === item.produto_id)
+          await supabase.from('produtos').update({ estoque_atual: prod.estoque_atual - item.quantidade }).eq('id', item.produto_id)
+          await supabase.from('movimentacoes').insert({ produto_id: item.produto_id, tipo: 'saida', motivo: 'venda', quantidade: item.quantidade, referencia_id: venda.id })
+        }
+        await supabase.from('financeiro').insert({ tipo: 'entrada', categoria: 'venda', descricao: `Venda ${carrinho.map(i => i.nome).join(', ')} via ${canal}`, valor: totalCarrinho, referencia_id: venda.id })
+        showMsg('Venda registrada! 🎉', 'success')
       }
 
-      // Lançamento financeiro
-      await supabase.from('financeiro').insert({
-        tipo: 'entrada',
-        categoria: 'venda',
-        descricao: `Venda ${carrinho.map(i => i.nome).join(', ')} via ${canal}`,
-        valor: totalCarrinho,
-        referencia_id: venda.id,
-      })
-
-      showMsg('Venda registrada com sucesso! 🎉', 'success')
       setModal(false)
       loadAll()
     } catch (e) {
-      showMsg('Erro ao registrar venda: ' + e.message, 'danger')
+      showMsg('Erro: ' + e.message, 'danger')
     }
     setSalvando(false)
   }
 
-  function showMsg(text, type = 'success') {
-    setMsg({ text, type })
-    setTimeout(() => setMsg(null), 4000)
+  async function excluirVenda(venda, e) {
+    e.stopPropagation()
+    if (!confirm('Excluir esta venda? O estoque dos produtos será restaurado.')) return
+
+    try {
+      // Restaurar estoque
+      for (const item of venda.itens_venda) {
+        const prod = produtos.find(p => p.id === item.produto_id)
+        if (prod) {
+          await supabase.from('produtos').update({ estoque_atual: prod.estoque_atual + item.quantidade }).eq('id', item.produto_id)
+        }
+      }
+      // Deletar financeiro e movimentações vinculadas
+      await supabase.from('financeiro').delete().eq('referencia_id', venda.id)
+      await supabase.from('movimentacoes').delete().eq('referencia_id', venda.id)
+      // Deletar venda (itens em cascade)
+      await supabase.from('vendas').delete().eq('id', venda.id)
+      showMsg('Venda excluída e estoque restaurado.', 'success')
+      loadAll()
+    } catch (e) {
+      showMsg('Erro ao excluir: ' + e.message, 'danger')
+    }
   }
+
+  function showMsg(text, type = 'success') { setMsg({ text, type }); setTimeout(() => setMsg(null), 4000) }
 
   const fmt = (v) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
   const canalLabel = { whatsapp: '💬 WhatsApp', presencial: '🏪 Presencial', feira: '🎪 Feira' }
   const canalColor = { whatsapp: 'badge-verde', presencial: 'badge-dourado', feira: 'badge-nude' }
 
-  // Totais do mês
-  const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0,0,0,0)
+  const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0, 0, 0, 0)
   const vendasMes = vendas.filter(v => new Date(v.created_at) >= inicioMes)
   const totalMes = vendasMes.reduce((s, v) => s + Number(v.total), 0)
 
@@ -171,10 +195,10 @@ export default function Vendas() {
           <h2 className="page-title">Vendas</h2>
           <p className="page-subtitle">{vendasMes.length} vendas este mês · {fmt(totalMes)}</p>
         </div>
-        <button className="btn btn-primary" onClick={abrirModal}>+ Registrar Venda</button>
+        <button className="btn btn-primary" onClick={abrirNovaVenda}>+ Registrar Venda</button>
       </div>
 
-      {/* Resumo rápido */}
+      {/* Resumo canais */}
       <div className="grid-3" style={{ marginBottom: 20 }}>
         {['whatsapp', 'presencial', 'feira'].map(c => {
           const vs = vendasMes.filter(v => v.canal === c)
@@ -188,46 +212,33 @@ export default function Vendas() {
         })}
       </div>
 
-      {loading ? (
-        <p style={{ color: 'var(--texto-leve)' }}>Carregando...</p>
-      ) : vendas.length === 0 ? (
-        <div className="card empty-state">
-          <div className="icon">🛍️</div>
-          <h3>Nenhuma venda ainda</h3>
-          <p>Registre a primeira venda clicando em "+ Registrar Venda"</p>
-        </div>
+      {loading ? <p style={{ color: 'var(--texto-leve)' }}>Carregando...</p> : vendas.length === 0 ? (
+        <div className="card empty-state"><div className="icon">🛍️</div><h3>Nenhuma venda ainda</h3><p>Registre a primeira venda clicando em "+ Registrar Venda"</p></div>
       ) : (
         <div className="table-wrapper">
           <table>
             <thead>
-              <tr>
-                <th>Data</th>
-                <th>Produtos</th>
-                <th>Canal</th>
-                <th>Qtd. Itens</th>
-                <th>Total</th>
-                <th>Obs.</th>
-              </tr>
+              <tr><th>Data</th><th>Produtos</th><th>Canal</th><th>Total</th><th>Obs.</th><th style={{ textAlign: 'right' }}>Ações</th></tr>
             </thead>
             <tbody>
               {vendas.map(v => (
-                <tr key={v.id} style={{ cursor: 'pointer' }} onClick={() => setDetalhe(v)}>
+                <tr key={v.id} onClick={() => setDetalhe(v)} style={{ cursor: 'pointer' }}>
                   <td style={{ whiteSpace: 'nowrap', color: 'var(--texto-leve)', fontSize: 12 }}>
-                    {new Date(v.created_at).toLocaleDateString('pt-BR')}
-                    <br />
+                    {new Date(v.created_at).toLocaleDateString('pt-BR')}<br />
                     <span style={{ fontSize: 11 }}>{new Date(v.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                   </td>
                   <td style={{ fontSize: 12 }}>
-                    {v.itens_venda?.map(i => (
-                      <span key={i.produto_id} style={{ display: 'block' }}>
-                        {i.quantidade}x {i.produtos?.nome}
-                      </span>
-                    ))}
+                    {v.itens_venda?.map(i => <span key={i.produto_id} style={{ display: 'block' }}>{i.quantidade}x {i.produtos?.nome}</span>)}
                   </td>
                   <td><span className={`badge ${canalColor[v.canal] || 'badge-nude'}`}>{canalLabel[v.canal] || v.canal}</span></td>
-                  <td>{v.itens_venda?.reduce((s, i) => s + i.quantidade, 0)} un</td>
                   <td style={{ fontWeight: 700, color: 'var(--dourado-dark)' }}>{fmt(v.total)}</td>
                   <td style={{ fontSize: 12, color: 'var(--texto-leve)' }}>{v.observacao || '—'}</td>
+                  <td onClick={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end' }}>
+                      <button className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 12 }} onClick={(e) => { e.stopPropagation(); abrirEditar(v) }}>✏️ Editar</button>
+                      <button className="btn btn-danger" style={{ padding: '5px 10px', fontSize: 12 }} onClick={(e) => excluirVenda(v, e)}>🗑️ Excluir</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -235,38 +246,33 @@ export default function Vendas() {
         </div>
       )}
 
-      {/* Modal Nova Venda */}
+      {/* Modal Nova / Editar Venda */}
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(false)}>
           <div className="modal" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 style={{ fontSize: 22 }}>Nova Venda</h3>
+              <h3 style={{ fontSize: 22 }}>{editandoVenda ? 'Editar Venda' : 'Nova Venda'}</h3>
               <button onClick={() => setModal(false)} style={{ background: 'none', fontSize: 20, color: 'var(--texto-leve)' }}>✕</button>
             </div>
             <div className="modal-body">
+              {editandoVenda && (
+                <div className="alert alert-warning">
+                  ✏️ Editando venda de {new Date(editandoVenda.created_at).toLocaleDateString('pt-BR')} — o estoque será recalculado automaticamente.
+                </div>
+              )}
               {/* Canal */}
               <div className="form-group">
                 <label className="form-label">Canal de Venda</label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   {['whatsapp', 'presencial', 'feira'].map(c => (
-                    <button
-                      key={c}
-                      onClick={() => setCanal(c)}
-                      style={{
-                        flex: 1, padding: '10px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-                        background: canal === c ? 'var(--dourado)' : 'var(--bege)',
-                        color: canal === c ? 'white' : 'var(--texto-leve)',
-                        border: canal === c ? 'none' : '1.5px solid var(--bege-dark)',
-                        textTransform: 'capitalize',
-                      }}
-                    >
+                    <button key={c} onClick={() => setCanal(c)} style={{ flex: 1, padding: '10px', borderRadius: 8, fontSize: 12, fontWeight: 600, background: canal === c ? 'var(--dourado)' : 'var(--bege)', color: canal === c ? 'white' : 'var(--texto-leve)', border: canal === c ? 'none' : '1.5px solid var(--bege-dark)', textTransform: 'capitalize' }}>
                       {canalLabel[c]}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Selecionar produto */}
+              {/* Adicionar item */}
               <div style={{ background: 'var(--bege)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--texto-leve)', textTransform: 'uppercase' }}>Adicionar item</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 120px auto', gap: 8, alignItems: 'end' }}>
@@ -274,21 +280,11 @@ export default function Vendas() {
                     <label className="form-label">Produto</label>
                     <select className="form-input" value={produtoSel} onChange={e => selecionarProduto(e.target.value)}>
                       <option value="">Selecione...</option>
-                      {produtos.map(p => (
-                        <option key={p.id} value={p.id} disabled={p.estoque_atual === 0}>
-                          {p.nome} ({p.estoque_atual} em estoque)
-                        </option>
-                      ))}
+                      {produtos.map(p => <option key={p.id} value={p.id}>{p.nome} ({p.estoque_atual} em estoque)</option>)}
                     </select>
                   </div>
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label">Qtd</label>
-                    <input className="form-input" type="number" min="1" value={qtd} onChange={e => setQtd(e.target.value)} />
-                  </div>
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label">Preço (R$)</label>
-                    <input className="form-input" type="number" step="0.01" min="0" value={preco} onChange={e => setPreco(e.target.value)} />
-                  </div>
+                  <div className="form-group" style={{ margin: 0 }}><label className="form-label">Qtd</label><input className="form-input" type="number" min="1" value={qtd} onChange={e => setQtd(e.target.value)} /></div>
+                  <div className="form-group" style={{ margin: 0 }}><label className="form-label">Preço (R$)</label><input className="form-input" type="number" step="0.01" min="0" value={preco} onChange={e => setPreco(e.target.value)} /></div>
                   <button className="btn btn-primary" style={{ height: 40 }} onClick={adicionarItem}>+</button>
                 </div>
               </div>
@@ -296,37 +292,22 @@ export default function Vendas() {
               {/* Carrinho */}
               {carrinho.length > 0 && (
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--texto-leve)', textTransform: 'uppercase', marginBottom: 8 }}>
-                    Itens da venda
-                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--texto-leve)', textTransform: 'uppercase', marginBottom: 8 }}>Itens da venda</div>
                   {carrinho.map(item => (
-                    <div key={item.produto_id} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '10px 14px', background: 'var(--branco)', borderRadius: 8, marginBottom: 6,
-                      border: '1px solid var(--bege-dark)',
-                    }}>
+                    <div key={item.produto_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--branco)', borderRadius: 8, marginBottom: 6, border: '1px solid var(--bege-dark)' }}>
                       <div>
                         <div style={{ fontWeight: 500, fontSize: 13 }}>{item.nome}</div>
-                        <div style={{ fontSize: 12, color: 'var(--texto-leve)' }}>
-                          {item.quantidade} un × {fmt(item.preco_unitario)}
-                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--texto-leve)' }}>{item.quantidade} un × {fmt(item.preco_unitario)}</div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <span style={{ fontWeight: 700, color: 'var(--dourado-dark)' }}>
-                          {fmt(item.quantidade * item.preco_unitario)}
-                        </span>
+                        <span style={{ fontWeight: 700, color: 'var(--dourado-dark)' }}>{fmt(item.quantidade * item.preco_unitario)}</span>
                         <button onClick={() => removerItem(item.produto_id)} style={{ background: 'none', color: 'var(--danger)', fontSize: 16 }}>✕</button>
                       </div>
                     </div>
                   ))}
-                  <div style={{
-                    marginTop: 8, padding: '12px 14px', background: '#F5EDD8', borderRadius: 8,
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  }}>
+                  <div style={{ marginTop: 8, padding: '12px 14px', background: '#F5EDD8', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontWeight: 600, fontSize: 14 }}>Total</span>
-                    <span style={{ fontWeight: 700, fontSize: 20, fontFamily: 'Cormorant Garamond, serif', color: 'var(--dourado-dark)' }}>
-                      {fmt(totalCarrinho)}
-                    </span>
+                    <span style={{ fontWeight: 700, fontSize: 20, fontFamily: 'Cormorant Garamond, serif', color: 'var(--dourado-dark)' }}>{fmt(totalCarrinho)}</span>
                   </div>
                 </div>
               )}
@@ -338,15 +319,15 @@ export default function Vendas() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setModal(false)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={registrarVenda} disabled={salvando || carrinho.length === 0}>
-                {salvando ? 'Registrando...' : `Confirmar Venda${carrinho.length > 0 ? ` · ${fmt(totalCarrinho)}` : ''}`}
+              <button className="btn btn-primary" onClick={salvarVenda} disabled={salvando || carrinho.length === 0}>
+                {salvando ? 'Salvando...' : editandoVenda ? 'Salvar Alterações' : `Confirmar Venda${carrinho.length > 0 ? ` · ${fmt(totalCarrinho)}` : ''}`}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Detalhe venda */}
+      {/* Detalhe */}
       {detalhe && (
         <div className="modal-overlay" onClick={() => setDetalhe(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
