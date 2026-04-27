@@ -97,7 +97,9 @@ export default function Vendas() {
     setDesconto('')
     setTipoDesconto('percent')
     setModoBusca('lista')
-  } {
+  }
+
+  function abrirNovaVenda() {
     setEditandoVenda(null)
     resetModal()
     setModal(true)
