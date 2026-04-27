@@ -99,14 +99,14 @@ export default function Clientes() {
   const aniversarioHoje = (data) => {
     if (!data) return false
     const hoje = new Date()
-    const nasc = new Date(data)
+    const nasc = new Date(data + 'T12:00:00')
     return nasc.getDate() === hoje.getDate() && nasc.getMonth() === hoje.getMonth()
   }
 
   const calcularIdade = (data) => {
     if (!data) return null
     const hoje = new Date()
-    const nasc = new Date(data)
+    const nasc = new Date(data + 'T12:00:00')
     let idade = hoje.getFullYear() - nasc.getFullYear()
     if (hoje.getMonth() < nasc.getMonth() || (hoje.getMonth() === nasc.getMonth() && hoje.getDate() < nasc.getDate())) idade--
     return idade
@@ -120,7 +120,7 @@ export default function Clientes() {
   // Aniversariantes do mês
   const anivMes = clientes.filter(c => {
     if (!c.data_nascimento) return false
-    return new Date(c.data_nascimento).getMonth() === new Date().getMonth()
+    return new Date(c.data_nascimento + 'T12:00:00').getMonth() === new Date().getMonth()
   })
 
   return (
@@ -142,7 +142,7 @@ export default function Clientes() {
           {anivMes.map(c => (
             <span key={c.id} style={{ marginRight: 12 }}>
               {aniversarioHoje(c.data_nascimento) ? '🎉 ' : ''}{c.nome}
-              {c.data_nascimento && ` (${new Date(c.data_nascimento).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })})`}
+              {c.data_nascimento && ` (${new Date(c.data_nascimento + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })})`}
             </span>
           ))}
         </div>
@@ -205,7 +205,7 @@ export default function Clientes() {
                   <td style={{ fontSize: 12, color: 'var(--texto-leve)' }}>{c.cpf || '—'}</td>
                   <td style={{ fontSize: 12, color: 'var(--texto-leve)', whiteSpace: 'nowrap' }}>
                     {c.data_nascimento
-                      ? `${new Date(c.data_nascimento).toLocaleDateString('pt-BR')} (${calcularIdade(c.data_nascimento)} anos)`
+                      ? `${new Date(c.data_nascimento + 'T12:00:00').toLocaleDateString('pt-BR')} (${calcularIdade(c.data_nascimento)} anos)`
                       : '—'}
                   </td>
                   <td style={{ fontSize: 12, color: 'var(--texto-leve)', maxWidth: 160 }}>
@@ -316,7 +316,7 @@ export default function Clientes() {
                   <div style={{ display: 'flex', gap: 8 }}>
                     <span>🎂</span>
                     <span>
-                      {new Date(detalhe.data_nascimento).toLocaleDateString('pt-BR')}
+                      {new Date(detalhe.data_nascimento + 'T12:00:00').toLocaleDateString('pt-BR')}
                       {' · '}{calcularIdade(detalhe.data_nascimento)} anos
                       {aniversarioHoje(detalhe.data_nascimento) && <span style={{ marginLeft: 8, color: 'var(--success)', fontWeight: 700 }}>🎉 Hoje!</span>}
                     </span>
