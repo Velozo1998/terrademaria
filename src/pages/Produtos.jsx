@@ -1,7 +1,25 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 
-const CATEGORIAS = ['terço', 'escapulário', 'pulseira', 'chaveiro', 'medalhão', 'kit', 'outros']
+const CATEGORIAS_BASE = ['terço', 'escapulário', 'pulseira', 'chaveiro', 'medalhão', 'kit', 'outros']
+
+function getCategorias() {
+  try {
+    const salvas = JSON.parse(localStorage.getItem('tdm_categorias') || '[]')
+    const todas = [...CATEGORIAS_BASE]
+    salvas.forEach(c => { if (!todas.includes(c)) todas.push(c) })
+    return todas
+  } catch { return CATEGORIAS_BASE }
+}
+
+function salvarCategoriaExtra(nova) {
+  try {
+    const salvas = JSON.parse(localStorage.getItem('tdm_categorias') || '[]')
+    if (!salvas.includes(nova)) {
+      localStorage.setItem('tdm_categorias', JSON.stringify([...salvas, nova]))
+    }
+  } catch {}
+}
 
 const EMBALAGEM_PADRAO = 0.38
 
@@ -207,6 +225,21 @@ export default function Produtos() {
   const [catFiltro, setCatFiltro] = useState('todas')
   const [msg, setMsg] = useState(null)
   const [aba, setAba] = useState('ativos')
+  const [categorias, setCategorias] = useState(getCategorias)
+  const [novaCategoria, setNovaCategoria] = useState('')
+  const [addingCat, setAddingCat] = useState(false)
+
+  function adicionarCategoria() {
+    const nova = novaCategoria.trim().toLowerCase()
+    if (!nova) return
+    if (!categorias.includes(nova)) {
+      salvarCategoriaExtra(nova)
+      setCategorias(getCategorias())
+    }
+    setForm(f => ({ ...f, categoria: nova }))
+    setNovaCategoria('')
+    setAddingCat(false)
+  }
 
   useEffect(() => { loadProdutos() }, [])
 
@@ -335,7 +368,7 @@ export default function Produtos() {
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
               <input className="form-input" style={{ maxWidth: 220, margin: 0 }} placeholder="🔍  Buscar produto..." value={busca} onChange={e => setBusca(e.target.value)} />
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {['todas', ...CATEGORIAS].map(c => (
+                {['todas', ...categorias].map(c => (
                   <button key={c} onClick={() => setCatFiltro(c)} style={{
                     padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
                     background: catFiltro === c ? 'var(--dourado)' : 'var(--bege)',
@@ -460,9 +493,29 @@ export default function Produtos() {
               {/* Categoria */}
               <div className="form-group">
                 <label className="form-label">Categoria</label>
-                <select className="form-input" value={form.categoria} onChange={e => setForm(f => ({ ...f, categoria: e.target.value }))}>
-                  {CATEGORIAS.map(c => <option key={c} value={c} style={{ textTransform: 'capitalize' }}>{c}</option>)}
-                </select>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <select className="form-input" style={{ flex: 1, margin: 0 }} value={form.categoria} onChange={e => setForm(f => ({ ...f, categoria: e.target.value }))}>
+                    {categorias.map(c => <option key={c} value={c} style={{ textTransform: 'capitalize' }}>{c}</option>)}
+                  </select>
+                  {!addingCat && (
+                    <button type="button" onClick={() => setAddingCat(true)} style={{ padding: '0 14px', borderRadius: 8, background: 'var(--bege)', border: '1.5px solid var(--bege-dark)', fontSize: 18, cursor: 'pointer', color: 'var(--dourado-dark)', fontWeight: 700 }} title="Adicionar nova categoria">+</button>
+                  )}
+                </div>
+                {addingCat && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <input
+                      className="form-input"
+                      style={{ flex: 1, margin: 0 }}
+                      placeholder="Nome da nova categoria..."
+                      value={novaCategoria}
+                      onChange={e => setNovaCategoria(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') adicionarCategoria(); if (e.key === 'Escape') { setAddingCat(false); setNovaCategoria('') } }}
+                      autoFocus
+                    />
+                    <button type="button" onClick={adicionarCategoria} style={{ padding: '0 14px', borderRadius: 8, background: 'var(--dourado)', color: 'white', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Criar</button>
+                    <button type="button" onClick={() => { setAddingCat(false); setNovaCategoria('') }} style={{ padding: '0 10px', borderRadius: 8, background: 'var(--bege)', border: '1px solid var(--bege-dark)', cursor: 'pointer', fontSize: 13 }}>✕</button>
+                  </div>
+                )}
               </div>
 
               {/* Custo + Preço */}

@@ -10,12 +10,7 @@ function StatCard({ icon, label, value, sub, color = 'var(--dourado)' }) {
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontSize: 13, color: 'var(--texto-leve)', fontWeight: 500 }}>{label}</span>
-        <span style={{
-          background: `${color}18`,
-          borderRadius: 8,
-          padding: '6px 8px',
-          fontSize: 18,
-        }}>{icon}</span>
+        <span style={{ background: `${color}18`, borderRadius: 8, padding: '6px 8px', fontSize: 18 }}>{icon}</span>
       </div>
       <div style={{ fontSize: 28, fontFamily: 'Cormorant Garamond, serif', fontWeight: 700, color }}>
         {value}
@@ -31,6 +26,8 @@ export default function Dashboard() {
     lucroMes: 0,
     saldo: 0,
     totalProdutos: 0,
+    valorEstoqueBruto: 0,
+    custoEstoque: 0,
   })
   const [estoqueBaixo, setEstoqueBaixo] = useState([])
   const [vendasRecentes, setVendasRecentes] = useState([])
@@ -47,7 +44,6 @@ export default function Dashboard() {
       inicioMes.setDate(1)
       inicioMes.setHours(0, 0, 0, 0)
 
-      // Vendas do mês
       const { data: vendasMesData } = await supabase
         .from('vendas')
         .select('total, created_at')
@@ -55,22 +51,23 @@ export default function Dashboard() {
 
       const totalVendasMes = vendasMesData?.reduce((s, v) => s + Number(v.total), 0) || 0
 
-      // Saldo financeiro
       const { data: finData } = await supabase.from('financeiro').select('tipo, valor')
       const saldo = finData?.reduce((s, f) => f.tipo === 'entrada' ? s + Number(f.valor) : s - Number(f.valor), 0) || 0
 
-      // Total produtos ativos
       const { count: totalProdutos } = await supabase
         .from('produtos').select('id', { count: 'exact' }).eq('ativo', true)
 
-      // Estoque baixo
       const { data: produtosData } = await supabase
         .from('produtos').select('*').eq('ativo', true)
 
       const baixo = produtosData?.filter(p => p.estoque_atual <= p.estoque_minimo) || []
       setEstoqueBaixo(baixo)
 
-      // Lucro do mês (itens vendidos no mês)
+      // Valor bruto do estoque (potencial de receita)
+      const valorEstoqueBruto = produtosData?.reduce((s, p) => s + (p.estoque_atual * Number(p.preco_venda)), 0) || 0
+      // Custo do estoque (capital investido)
+      const custoEstoque = produtosData?.reduce((s, p) => s + (p.estoque_atual * Number(p.custo)), 0) || 0
+
       const { data: itensVendasMes } = await supabase
         .from('itens_venda')
         .select('quantidade, preco_unitario, produto_id, vendas(created_at), produtos(custo)')
@@ -83,9 +80,8 @@ export default function Dashboard() {
         return s + (receita - custo)
       }, 0) || 0
 
-      setStats({ vendasMes: totalVendasMes, lucroMes, saldo, totalProdutos: totalProdutos || 0 })
+      setStats({ vendasMes: totalVendasMes, lucroMes, saldo, totalProdutos: totalProdutos || 0, valorEstoqueBruto, custoEstoque })
 
-      // Vendas recentes
       const { data: recentes } = await supabase
         .from('vendas')
         .select('id, total, canal, created_at, itens_venda(quantidade, produto_id, produtos(nome))')
@@ -93,7 +89,6 @@ export default function Dashboard() {
         .limit(8)
       setVendasRecentes(recentes || [])
 
-      // Top produtos (últimos 30 dias)
       const inicio30 = new Date()
       inicio30.setDate(inicio30.getDate() - 30)
       const { data: itens30 } = await supabase
@@ -112,7 +107,6 @@ export default function Dashboard() {
       const top = Object.values(agrupado).sort((a, b) => b.quantidade - a.quantidade).slice(0, 5)
       setTopProdutos(top)
 
-      // Chart: últimos 7 dias
       const dias = []
       for (let i = 6; i >= 0; i--) {
         const d = new Date()
@@ -138,7 +132,6 @@ export default function Dashboard() {
   }
 
   const fmt = (v) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-
   const canalLabel = { whatsapp: 'WhatsApp', presencial: 'Presencial', feira: 'Feira' }
   const canalColor = { whatsapp: 'badge-verde', presencial: 'badge-dourado', feira: 'badge-nude' }
 
@@ -168,16 +161,36 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Stat cards */}
-      <div className="grid-4" style={{ marginBottom: 24 }}>
+      {/* Stat cards — linha 1: financeiro */}
+      <div className="grid-4" style={{ marginBottom: 16 }}>
         <StatCard icon="💰" label="Vendas do mês" value={fmt(stats.vendasMes)} sub="receita total" color="var(--dourado)" />
         <StatCard icon="📈" label="Lucro estimado" value={fmt(stats.lucroMes)} sub="receita − custo" color="var(--success)" />
         <StatCard icon="🏦" label="Saldo financeiro" value={fmt(stats.saldo)} sub="todas entradas/saídas" color={stats.saldo >= 0 ? 'var(--success)' : 'var(--danger)'} />
         <StatCard icon="📿" label="Produtos ativos" value={stats.totalProdutos} sub={`${estoqueBaixo.length} com estoque baixo`} color="var(--verde)" />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
+      {/* Stat cards — linha 2: estoque */}
+      <div className="grid-2" style={{ marginBottom: 24 }}>
+        <div className="card" style={{ borderLeft: '4px solid var(--dourado)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 13, color: 'var(--texto-leve)', fontWeight: 500 }}>🏷️ Potencial de receita do estoque</div>
+          <div style={{ fontSize: 28, fontFamily: 'Cormorant Garamond, serif', fontWeight: 700, color: 'var(--dourado-dark)' }}>{fmt(stats.valorEstoqueBruto)}</div>
+          <div style={{ fontSize: 11, color: 'var(--texto-leve)' }}>se vender tudo pelo preço de venda atual</div>
+        </div>
+        <div className="card" style={{ borderLeft: '4px solid var(--texto-leve)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 13, color: 'var(--texto-leve)', fontWeight: 500 }}>📦 Capital investido no estoque</div>
+          <div style={{ fontSize: 28, fontFamily: 'Cormorant Garamond, serif', fontWeight: 700, color: 'var(--texto)' }}>{fmt(stats.custoEstoque)}</div>
+          <div style={{ fontSize: 11, color: 'var(--texto-leve)' }}>
+            custo total dos produtos em estoque
+            {stats.custoEstoque > 0 && stats.valorEstoqueBruto > 0 && (
+              <span style={{ marginLeft: 6, color: 'var(--success)', fontWeight: 600 }}>
+                · margem potencial {(((stats.valorEstoqueBruto - stats.custoEstoque) / stats.valorEstoqueBruto) * 100).toFixed(0)}%
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
 
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
         {/* Gráfico de vendas */}
         <div className="card">
           <h3 style={{ fontSize: 20, marginBottom: 16 }}>Vendas — últimos 7 dias</h3>
@@ -190,7 +203,7 @@ export default function Dashboard() {
                 formatter={(v) => [`R$ ${v.toFixed(2)}`, 'Vendas']}
                 contentStyle={{ borderRadius: 8, border: '1px solid var(--bege-dark)', fontSize: 13 }}
               />
-              <Bar dataKey="vendas" fill="var(--dourado)" radius={[6,6,0,0]} />
+              <Bar dataKey="vendas" fill="var(--dourado)" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -204,13 +217,7 @@ export default function Dashboard() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {topProdutos.map((p, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{
-                    width: 28, height: 28, borderRadius: '50%',
-                    background: i === 0 ? 'var(--dourado)' : 'var(--bege-dark)',
-                    color: i === 0 ? 'white' : 'var(--texto-leve)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 12, fontWeight: 700, flexShrink: 0,
-                  }}>
+                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: i === 0 ? 'var(--dourado)' : 'var(--bege-dark)', color: i === 0 ? 'white' : 'var(--texto-leve)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
                     {i + 1}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -228,9 +235,7 @@ export default function Dashboard() {
       <div className="card" style={{ marginTop: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
           <h3 style={{ fontSize: 20 }}>Vendas recentes</h3>
-          <Link to="/vendas" style={{ fontSize: 13, color: 'var(--dourado)', fontWeight: 600, textDecoration: 'none' }}>
-            Ver todas →
-          </Link>
+          <Link to="/vendas" style={{ fontSize: 13, color: 'var(--dourado)', fontWeight: 600, textDecoration: 'none' }}>Ver todas →</Link>
         </div>
         {vendasRecentes.length === 0 ? (
           <p style={{ color: 'var(--texto-leve)', fontSize: 13 }}>Nenhuma venda registrada ainda.</p>
@@ -238,12 +243,7 @@ export default function Dashboard() {
           <div className="table-wrapper">
             <table>
               <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Produtos</th>
-                  <th>Canal</th>
-                  <th>Total</th>
-                </tr>
+                <tr><th>Data</th><th>Produtos</th><th>Canal</th><th>Total</th></tr>
               </thead>
               <tbody>
                 {vendasRecentes.map(v => (

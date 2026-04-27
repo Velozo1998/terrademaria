@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
 
 const CATEGORIAS = ['terço', 'escapulário', 'pulseira', 'chaveiro', 'medalhão', 'kit', 'outros']
@@ -12,12 +12,17 @@ export default function Compras() {
   const [itens, setItens] = useState([])
   const [fornecedor, setFornecedor] = useState('')
   const [observacao, setObservacao] = useState('')
-  const [produtoSel, setProdutoSel] = useState('')
   const [qtd, setQtd] = useState(1)
   const [custo, setCusto] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [msg, setMsg] = useState(null)
   const [detalhe, setDetalhe] = useState(null)
+
+  // Busca produto
+  const [buscaProduto, setBuscaProduto] = useState('')
+  const [showDropProd, setShowDropProd] = useState(false)
+  const [produtoSel, setProdutoSel] = useState(null)
+  const dropProdRef = useRef(null)
 
   // Modal rápido de novo produto
   const [modalProduto, setModalProduto] = useState(false)
@@ -25,6 +30,14 @@ export default function Compras() {
   const [salvandoProduto, setSalvandoProduto] = useState(false)
 
   useEffect(() => { loadAll() }, [])
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (dropProdRef.current && !dropProdRef.current.contains(e.target)) setShowDropProd(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
 
   async function loadAll() {
     setLoading(true)
@@ -54,16 +67,27 @@ export default function Compras() {
     if (error) {
       showMsg('Erro: ' + error.message, 'danger')
     } else {
-      showMsg(`"${data.nome}" cadastrado e já disponível!`, 'success')
+      showMsg(`"${data.nome}" cadastrado!`, 'success')
       setModalProduto(false)
       setFormProduto({ nome: '', categoria: 'terço', custo: '', preco_venda: '' })
-      // Recarrega produtos e já seleciona o novo
       const { data: novosP } = await supabase.from('produtos').select('*').eq('ativo', true).order('nome')
       setProdutos(novosP || [])
-      setProdutoSel(data.id)
+      selecionarProdutoDrop(data)
       setCusto(data.custo || '')
     }
     setSalvandoProduto(false)
+  }
+
+  // Produto combobox
+  const prodsFiltrados = produtos.filter(p =>
+    p.nome.toLowerCase().includes(buscaProduto.toLowerCase())
+  ).slice(0, 8)
+
+  function selecionarProdutoDrop(p) {
+    setProdutoSel(p)
+    setBuscaProduto(p.nome)
+    setCusto(p.custo || '')
+    setShowDropProd(false)
   }
 
   // ─── Compra ───────────────────────────────────────────
@@ -72,7 +96,8 @@ export default function Compras() {
     setItens([])
     setFornecedor('')
     setObservacao('')
-    setProdutoSel('')
+    setBuscaProduto('')
+    setProdutoSel(null)
     setQtd(1)
     setCusto('')
     setModal(true)
@@ -90,16 +115,11 @@ export default function Compras() {
       estoque_atual: produtos.find(p => p.id === i.produto_id)?.estoque_atual || 0,
     }))
     setItens(itensExistentes)
-    setProdutoSel('')
+    setBuscaProduto('')
+    setProdutoSel(null)
     setQtd(1)
     setCusto('')
     setModal(true)
-  }
-
-  function selecionarProduto(id) {
-    setProdutoSel(id)
-    const p = produtos.find(x => x.id === id)
-    if (p) setCusto(p.custo || '')
   }
 
   function adicionarItem() {
@@ -107,16 +127,17 @@ export default function Compras() {
     if (!qtd || qtd <= 0) return showMsg('Informe a quantidade', 'danger')
     if (custo === '' || custo < 0) return showMsg('Informe o custo unitário', 'danger')
 
-    const produto = produtos.find(p => p.id === produtoSel)
+    const produto = produtos.find(p => p.id === produtoSel.id)
     if (!produto) return
 
-    const jaNoLista = itens.find(i => i.produto_id === produtoSel)
+    const jaNoLista = itens.find(i => i.produto_id === produtoSel.id)
     if (jaNoLista) {
-      setItens(prev => prev.map(i => i.produto_id === produtoSel ? { ...i, quantidade: i.quantidade + Number(qtd) } : i))
+      setItens(prev => prev.map(i => i.produto_id === produtoSel.id ? { ...i, quantidade: i.quantidade + Number(qtd) } : i))
     } else {
-      setItens(prev => [...prev, { produto_id: produtoSel, nome: produto.nome, quantidade: Number(qtd), custo_unitario: Number(custo), estoque_atual: produto.estoque_atual }])
+      setItens(prev => [...prev, { produto_id: produtoSel.id, nome: produto.nome, quantidade: Number(qtd), custo_unitario: Number(custo), estoque_atual: produto.estoque_atual }])
     }
-    setProdutoSel('')
+    setBuscaProduto('')
+    setProdutoSel(null)
     setQtd(1)
     setCusto('')
   }
@@ -193,6 +214,12 @@ export default function Compras() {
   const comprasMes = compras.filter(c => new Date(c.created_at) >= inicioMes)
   const totalMes = comprasMes.reduce((s, c) => s + Number(c.total), 0)
 
+  const dropStyle = {
+    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+    background: 'var(--branco)', border: '1.5px solid var(--bege-dark)',
+    borderRadius: 8, maxHeight: 220, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+  }
+
   return (
     <div>
       {msg && <div className={`alert alert-${msg.type}`} style={{ marginBottom: 16 }}>{msg.text}</div>}
@@ -223,8 +250,8 @@ export default function Compras() {
                   <td style={{ fontSize: 12, color: 'var(--texto-leve)' }}>{c.observacao || '—'}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end' }}>
-                      <button className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 12 }} onClick={(e) => { e.stopPropagation(); abrirEditar(c) }}>✏️ Editar</button>
-                      <button className="btn btn-danger" style={{ padding: '5px 10px', fontSize: 12 }} onClick={(e) => excluirCompra(c, e)}>🗑️ Excluir</button>
+                      <button className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 12 }} onClick={e => { e.stopPropagation(); abrirEditar(c) }}>✏️ Editar</button>
+                      <button className="btn btn-danger" style={{ padding: '5px 10px', fontSize: 12 }} onClick={e => excluirCompra(c, e)}>🗑️ Excluir</button>
                     </div>
                   </td>
                 </tr>
@@ -252,7 +279,7 @@ export default function Compras() {
                 <input className="form-input" value={fornecedor} onChange={e => setFornecedor(e.target.value)} placeholder="Nome do fornecedor (opcional)" />
               </div>
 
-              {/* Adicionar item */}
+              {/* Adicionar item com busca */}
               <div style={{ background: 'var(--bege)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--texto-leve)', textTransform: 'uppercase' }}>Adicionar item</div>
@@ -266,13 +293,38 @@ export default function Compras() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 130px auto', gap: 8, alignItems: 'end' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label">Produto</label>
-                    <select className="form-input" value={produtoSel} onChange={e => selecionarProduto(e.target.value)}>
-                      <option value="">Selecione...</option>
-                      {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                    </select>
+                    <div style={{ position: 'relative' }} ref={dropProdRef}>
+                      <input
+                        className="form-input"
+                        style={{ margin: 0 }}
+                        placeholder="🔍 Buscar produto..."
+                        value={buscaProduto}
+                        onChange={e => { setBuscaProduto(e.target.value); setShowDropProd(true); setProdutoSel(null); setCusto('') }}
+                        onFocus={() => setShowDropProd(true)}
+                      />
+                      {showDropProd && buscaProduto.length > 0 && (
+                        <div style={dropStyle}>
+                          {prodsFiltrados.length === 0 ? (
+                            <div style={{ padding: '10px 14px', fontSize: 13, color: 'var(--texto-leve)' }}>Nenhum produto encontrado</div>
+                          ) : prodsFiltrados.map(p => (
+                            <div key={p.id} style={{ padding: '9px 14px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid var(--bege)' }} onMouseDown={() => selecionarProdutoDrop(p)}>
+                              <strong>{p.nome}</strong>
+                              <span style={{ color: 'var(--texto-leve)', fontSize: 11, marginLeft: 6 }}>({p.estoque_atual} em estoque)</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {produtoSel && <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 2 }}>✅ {produtoSel.nome}</div>}
                   </div>
-                  <div className="form-group" style={{ margin: 0 }}><label className="form-label">Qtd</label><input className="form-input" type="number" min="1" value={qtd} onChange={e => setQtd(e.target.value)} /></div>
-                  <div className="form-group" style={{ margin: 0 }}><label className="form-label">Custo unit. (R$)</label><input className="form-input" type="number" step="0.01" min="0" value={custo} onChange={e => setCusto(e.target.value)} /></div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Qtd</label>
+                    <input className="form-input" type="number" min="1" value={qtd} onChange={e => setQtd(e.target.value)} />
+                  </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Custo unit. (R$)</label>
+                    <input className="form-input" type="number" step="0.01" min="0" value={custo} onChange={e => setCusto(e.target.value)} />
+                  </div>
                   <button className="btn btn-primary" style={{ height: 40 }} onClick={adicionarItem}>+</button>
                 </div>
               </div>
