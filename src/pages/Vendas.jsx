@@ -19,6 +19,8 @@ export default function Vendas() {
   const [detalhe, setDetalhe] = useState(null)
   const [filtro, setFiltro] = useState('todas')
 
+  const [modoBusca, setModoBusca] = useState('lista') // 'lista' | 'busca'
+
   // Busca produto
   const [buscaProduto, setBuscaProduto] = useState('')
   const [showDropProd, setShowDropProd] = useState(false)
@@ -94,9 +96,8 @@ export default function Vendas() {
     setClienteSel(null)
     setDesconto('')
     setTipoDesconto('percent')
-  }
-
-  function abrirNovaVenda() {
+    setModoBusca('lista')
+  } {
     setEditandoVenda(null)
     resetModal()
     setModal(true)
@@ -629,36 +630,47 @@ export default function Vendas() {
                 </div>
               )}
 
-              {/* Adicionar item com busca */}
+              {/* Adicionar item */}
               <div style={{ background: 'var(--bege)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--texto-leve)', textTransform: 'uppercase' }}>Adicionar item</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--texto-leve)', textTransform: 'uppercase' }}>Adicionar item</div>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button onClick={() => { setModoBusca('lista'); setBuscaProduto(''); setProdutoSel(null); setPreco('') }} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, border: '1px solid var(--bege-dark)', background: modoBusca === 'lista' ? 'var(--dourado)' : 'var(--branco)', color: modoBusca === 'lista' ? 'white' : 'var(--texto-leve)', cursor: 'pointer', fontWeight: 600 }}>☰ Lista</button>
+                    <button onClick={() => { setModoBusca('busca'); setBuscaProduto(''); setProdutoSel(null); setPreco('') }} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, border: '1px solid var(--bege-dark)', background: modoBusca === 'busca' ? 'var(--dourado)' : 'var(--branco)', color: modoBusca === 'busca' ? 'white' : 'var(--texto-leve)', cursor: 'pointer', fontWeight: 600 }}>🔍 Busca</button>
+                  </div>
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 120px auto', gap: 8, alignItems: 'end' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label">Produto</label>
-                    <div style={inputStyle} ref={dropProdRef}>
-                      <input
-                        className="form-input"
-                        style={{ margin: 0 }}
-                        placeholder="🔍 Buscar produto..."
-                        value={buscaProduto}
-                        onChange={e => { setBuscaProduto(e.target.value); setShowDropProd(true); setProdutoSel(null); setPreco('') }}
-                        onFocus={() => setShowDropProd(true)}
-                      />
-                      {showDropProd && buscaProduto.length > 0 && (
-                        <div style={dropStyle}>
-                          {prodsFiltrados.length === 0 ? (
-                            <div style={{ padding: '10px 14px', fontSize: 13, color: 'var(--texto-leve)' }}>Nenhum produto encontrado</div>
-                          ) : prodsFiltrados.map(p => (
-                            <div key={p.id} style={{ ...dropItemStyle(false), opacity: p.estoque_atual === 0 ? 0.4 : 1 }} onMouseDown={() => p.estoque_atual > 0 && selecionarProdutoDrop(p)}>
-                              <strong>{p.nome}</strong>
-                              <span style={{ color: p.estoque_atual === 0 ? 'var(--danger)' : 'var(--texto-leve)', fontSize: 11, marginLeft: 6 }}>
-                                ({p.estoque_atual} em estoque)
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    {modoBusca === 'lista' ? (
+                      <select className="form-input" style={{ margin: 0 }} value={produtoSel?.id || ''} onChange={e => { const p = produtos.find(x => x.id === e.target.value); if (p) selecionarProdutoDrop(p) }}>
+                        <option value="">Selecione...</option>
+                        {produtos.map(p => <option key={p.id} value={p.id} disabled={p.estoque_atual === 0}>{p.nome} ({p.estoque_atual} em estoque)</option>)}
+                      </select>
+                    ) : (
+                      <div style={inputStyle} ref={dropProdRef}>
+                        <input
+                          className="form-input"
+                          style={{ margin: 0 }}
+                          placeholder="Digite o nome do produto..."
+                          value={buscaProduto}
+                          onChange={e => { setBuscaProduto(e.target.value); setShowDropProd(true); setProdutoSel(null); setPreco('') }}
+                          onFocus={() => setShowDropProd(true)}
+                        />
+                        {showDropProd && buscaProduto.length > 0 && (
+                          <div style={dropStyle}>
+                            {prodsFiltrados.length === 0 ? (
+                              <div style={{ padding: '10px 14px', fontSize: 13, color: 'var(--texto-leve)' }}>Nenhum produto encontrado</div>
+                            ) : prodsFiltrados.map(p => (
+                              <div key={p.id} style={{ ...dropItemStyle(false), opacity: p.estoque_atual === 0 ? 0.4 : 1 }} onMouseDown={() => p.estoque_atual > 0 && selecionarProdutoDrop(p)}>
+                                <strong>{p.nome}</strong>
+                                <span style={{ color: p.estoque_atual === 0 ? 'var(--danger)' : 'var(--texto-leve)', fontSize: 11, marginLeft: 6 }}>({p.estoque_atual} em estoque)</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {produtoSel && <div style={{ fontSize: 11, color: 'var(--success)', marginTop: 2 }}>✅ {produtoSel.nome}</div>}
                   </div>
                   <div className="form-group" style={{ margin: 0 }}>
