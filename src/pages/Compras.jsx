@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 
+const CATEGORIAS = ['terço', 'escapulário', 'pulseira', 'chaveiro', 'medalhão', 'kit', 'outros']
+
 export default function Compras() {
   const [compras, setCompras] = useState([])
   const [produtos, setProdutos] = useState([])
@@ -17,6 +19,11 @@ export default function Compras() {
   const [msg, setMsg] = useState(null)
   const [detalhe, setDetalhe] = useState(null)
 
+  // Modal rápido de novo produto
+  const [modalProduto, setModalProduto] = useState(false)
+  const [formProduto, setFormProduto] = useState({ nome: '', categoria: 'terço', custo: '', preco_venda: '' })
+  const [salvandoProduto, setSalvandoProduto] = useState(false)
+
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
@@ -30,6 +37,36 @@ export default function Compras() {
     setLoading(false)
   }
 
+  // ─── Cadastro rápido de produto ───────────────────────
+  async function salvarNovoProduto() {
+    if (!formProduto.nome.trim()) return showMsg('Informe o nome do produto', 'danger')
+    if (!formProduto.preco_venda) return showMsg('Informe o preço de venda', 'danger')
+    setSalvandoProduto(true)
+    const { data, error } = await supabase.from('produtos').insert({
+      nome: formProduto.nome.trim(),
+      categoria: formProduto.categoria,
+      custo: Number(formProduto.custo) || 0,
+      preco_venda: Number(formProduto.preco_venda),
+      estoque_atual: 0,
+      estoque_minimo: 5,
+    }).select().single()
+
+    if (error) {
+      showMsg('Erro: ' + error.message, 'danger')
+    } else {
+      showMsg(`"${data.nome}" cadastrado e já disponível!`, 'success')
+      setModalProduto(false)
+      setFormProduto({ nome: '', categoria: 'terço', custo: '', preco_venda: '' })
+      // Recarrega produtos e já seleciona o novo
+      const { data: novosP } = await supabase.from('produtos').select('*').eq('ativo', true).order('nome')
+      setProdutos(novosP || [])
+      setProdutoSel(data.id)
+      setCusto(data.custo || '')
+    }
+    setSalvandoProduto(false)
+  }
+
+  // ─── Compra ───────────────────────────────────────────
   function abrirNovaCompra() {
     setEditandoCompra(null)
     setItens([])
@@ -68,7 +105,7 @@ export default function Compras() {
   function adicionarItem() {
     if (!produtoSel) return showMsg('Selecione um produto', 'danger')
     if (!qtd || qtd <= 0) return showMsg('Informe a quantidade', 'danger')
-    if (!custo || custo < 0) return showMsg('Informe o custo unitário', 'danger')
+    if (custo === '' || custo < 0) return showMsg('Informe o custo unitário', 'danger')
 
     const produto = produtos.find(p => p.id === produtoSel)
     if (!produto) return
@@ -91,25 +128,16 @@ export default function Compras() {
   async function salvarCompra() {
     if (itens.length === 0) return showMsg('Adicione pelo menos um produto', 'danger')
     setSalvando(true)
-
     try {
       if (editandoCompra) {
-        // --- EDITAR ---
-        // 1. Reverter estoque dos itens originais
         for (const item of editandoCompra.itens_compra) {
           const prod = produtos.find(p => p.id === item.produto_id)
-          if (prod) {
-            await supabase.from('produtos').update({ estoque_atual: prod.estoque_atual - item.quantidade }).eq('id', item.produto_id)
-          }
+          if (prod) await supabase.from('produtos').update({ estoque_atual: prod.estoque_atual - item.quantidade }).eq('id', item.produto_id)
         }
-        // 2. Deletar itens antigos e movimentações
         await supabase.from('itens_compra').delete().eq('compra_id', editandoCompra.id)
         await supabase.from('movimentacoes').delete().eq('referencia_id', editandoCompra.id)
-        // 3. Atualizar compra
         await supabase.from('compras').update({ fornecedor: fornecedor.trim() || 'Não informado', total: totalCompra, observacao }).eq('id', editandoCompra.id)
-        // 4. Inserir novos itens
         await supabase.from('itens_compra').insert(itens.map(i => ({ compra_id: editandoCompra.id, produto_id: i.produto_id, quantidade: i.quantidade, custo_unitario: i.custo_unitario })))
-        // 5. Atualizar estoque com novos itens
         for (const item of itens) {
           const prod = produtos.find(p => p.id === item.produto_id)
           const itemOriginal = editandoCompra.itens_compra.find(i => i.produto_id === item.produto_id)
@@ -117,12 +145,9 @@ export default function Compras() {
           await supabase.from('produtos').update({ estoque_atual: estoqueBase + item.quantidade, custo: item.custo_unitario }).eq('id', item.produto_id)
           await supabase.from('movimentacoes').insert({ produto_id: item.produto_id, tipo: 'entrada', motivo: 'compra', quantidade: item.quantidade, referencia_id: editandoCompra.id })
         }
-        // 6. Atualizar financeiro
         await supabase.from('financeiro').update({ valor: totalCompra, descricao: `Compra: ${itens.map(i => i.nome).join(', ')} · Fornecedor: ${fornecedor || 'Não informado'}` }).eq('referencia_id', editandoCompra.id)
         showMsg('Compra atualizada!', 'success')
-
       } else {
-        // --- NOVA COMPRA ---
         const { data: compra, error: errCompra } = await supabase.from('compras').insert({ fornecedor: fornecedor.trim() || 'Não informado', total: totalCompra, observacao }).select().single()
         if (errCompra) throw errCompra
         await supabase.from('itens_compra').insert(itens.map(i => ({ compra_id: compra.id, produto_id: i.produto_id, quantidade: i.quantidade, custo_unitario: i.custo_unitario })))
@@ -134,7 +159,6 @@ export default function Compras() {
         await supabase.from('financeiro').insert({ tipo: 'saida', categoria: 'compra', descricao: `Compra: ${itens.map(i => i.nome).join(', ')} · Fornecedor: ${fornecedor || 'Não informado'}`, valor: totalCompra, referencia_id: compra.id })
         showMsg('Compra registrada! Estoque atualizado. 📦', 'success')
       }
-
       setModal(false)
       loadAll()
     } catch (e) {
@@ -146,20 +170,13 @@ export default function Compras() {
   async function excluirCompra(compra, e) {
     e.stopPropagation()
     if (!confirm('Excluir esta compra? O estoque dos produtos será descontado.')) return
-
     try {
-      // Reverter estoque
       for (const item of compra.itens_compra) {
         const prod = produtos.find(p => p.id === item.produto_id)
-        if (prod) {
-          const novoEstoque = Math.max(0, prod.estoque_atual - item.quantidade)
-          await supabase.from('produtos').update({ estoque_atual: novoEstoque }).eq('id', item.produto_id)
-        }
+        if (prod) await supabase.from('produtos').update({ estoque_atual: Math.max(0, prod.estoque_atual - item.quantidade) }).eq('id', item.produto_id)
       }
-      // Deletar financeiro e movimentações
       await supabase.from('financeiro').delete().eq('referencia_id', compra.id)
       await supabase.from('movimentacoes').delete().eq('referencia_id', compra.id)
-      // Deletar compra (itens em cascade)
       await supabase.from('compras').delete().eq('id', compra.id)
       showMsg('Compra excluída e estoque ajustado.', 'success')
       loadAll()
@@ -189,7 +206,7 @@ export default function Compras() {
       </div>
 
       {loading ? <p style={{ color: 'var(--texto-leve)' }}>Carregando...</p> : compras.length === 0 ? (
-        <div className="card empty-state"><div className="icon">📦</div><h3>Nenhuma compra registrada</h3><p>Registre a primeira compra de mercadoria clicando acima</p></div>
+        <div className="card empty-state"><div className="icon">📦</div><h3>Nenhuma compra registrada</h3><p>Registre a primeira compra clicando acima</p></div>
       ) : (
         <div className="table-wrapper">
           <table>
@@ -217,20 +234,19 @@ export default function Compras() {
         </div>
       )}
 
-      {/* Modal Nova / Editar Compra */}
+      {/* ─── Modal Compra ─── */}
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(false)}>
-          <div className="modal" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()}>
+          <div className="modal" style={{ maxWidth: 660 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3 style={{ fontSize: 22 }}>{editandoCompra ? 'Editar Compra' : 'Registrar Compra'}</h3>
               <button onClick={() => setModal(false)} style={{ background: 'none', fontSize: 20, color: 'var(--texto-leve)' }}>✕</button>
             </div>
             <div className="modal-body">
               {editandoCompra && (
-                <div className="alert alert-warning">
-                  ✏️ Editando compra de {new Date(editandoCompra.created_at).toLocaleDateString('pt-BR')} — o estoque será recalculado automaticamente.
-                </div>
+                <div className="alert alert-warning">✏️ Editando compra de {new Date(editandoCompra.created_at).toLocaleDateString('pt-BR')} — o estoque será recalculado automaticamente.</div>
               )}
+
               <div className="form-group">
                 <label className="form-label">Fornecedor</label>
                 <input className="form-input" value={fornecedor} onChange={e => setFornecedor(e.target.value)} placeholder="Nome do fornecedor (opcional)" />
@@ -238,7 +254,15 @@ export default function Compras() {
 
               {/* Adicionar item */}
               <div style={{ background: 'var(--bege)', borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--texto-leve)', textTransform: 'uppercase' }}>Adicionar item</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--texto-leve)', textTransform: 'uppercase' }}>Adicionar item</div>
+                  <button
+                    onClick={() => setModalProduto(true)}
+                    style={{ fontSize: 12, fontWeight: 600, color: 'var(--dourado-dark)', background: '#F5EDD8', border: '1px solid var(--dourado)', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}
+                  >
+                    + Cadastrar novo produto
+                  </button>
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 130px auto', gap: 8, alignItems: 'end' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label">Produto</label>
@@ -288,6 +312,50 @@ export default function Compras() {
               <button className="btn btn-secondary" onClick={() => setModal(false)}>Cancelar</button>
               <button className="btn btn-primary" onClick={salvarCompra} disabled={salvando || itens.length === 0}>
                 {salvando ? 'Salvando...' : editandoCompra ? 'Salvar Alterações' : `Confirmar Compra${itens.length > 0 ? ` · ${fmt(totalCompra)}` : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Modal Cadastro Rápido de Produto ─── */}
+      {modalProduto && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setModalProduto(false)}>
+          <div className="modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: 20 }}>📿 Cadastrar Novo Produto</h3>
+              <button onClick={() => setModalProduto(false)} style={{ background: 'none', fontSize: 20, color: 'var(--texto-leve)' }}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ background: 'var(--bege)', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: 'var(--texto-leve)', marginBottom: 4 }}>
+                💡 O produto será adicionado à lista e já poderá ser selecionado na compra atual.
+              </div>
+              <div className="form-group">
+                <label className="form-label">Nome *</label>
+                <input className="form-input" value={formProduto.nome} onChange={e => setFormProduto(f => ({ ...f, nome: e.target.value }))} placeholder="Ex: Medalha de São Bento" autoFocus />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Categoria</label>
+                <select className="form-input" value={formProduto.categoria} onChange={e => setFormProduto(f => ({ ...f, categoria: e.target.value }))}>
+                  {CATEGORIAS.map(c => <option key={c} value={c} style={{ textTransform: 'capitalize' }}>{c}</option>)}
+                </select>
+              </div>
+              <div className="grid-2">
+                <div className="form-group">
+                  <label className="form-label">Custo (R$)</label>
+                  <input className="form-input" type="number" step="0.01" min="0" value={formProduto.custo} onChange={e => setFormProduto(f => ({ ...f, custo: e.target.value }))} placeholder="0,00" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Preço de Venda (R$) *</label>
+                  <input className="form-input" type="number" step="0.01" min="0" value={formProduto.preco_venda} onChange={e => setFormProduto(f => ({ ...f, preco_venda: e.target.value }))} placeholder="0,00" />
+                </div>
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--texto-leve)' }}>Estoque inicial será 0 — será atualizado ao confirmar a compra.</p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setModalProduto(false)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={salvarNovoProduto} disabled={salvandoProduto}>
+                {salvandoProduto ? 'Cadastrando...' : 'Cadastrar e Selecionar'}
               </button>
             </div>
           </div>

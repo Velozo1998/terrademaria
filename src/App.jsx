@@ -6,6 +6,8 @@ import Vendas from './pages/Vendas'
 import Compras from './pages/Compras'
 import Estoque from './pages/Estoque'
 import Financeiro from './pages/Financeiro'
+import Clientes from './pages/Clientes'
+import Cobranças from './pages/Cobranças'
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
           <Route path="compras" element={<Compras />} />
           <Route path="estoque" element={<Estoque />} />
           <Route path="financeiro" element={<Financeiro />} />
+          <Route path="clientes" element={<Clientes />} />
+          <Route path="cobranças" element={<Cobranças />} />
         </Route>
       </Routes>
     </BrowserRouter>
