@@ -49,6 +49,7 @@ export default function Layout({ user }) {
     { path: '/financeiro', label: 'Financeiro', icon: '💰' },
     { path: '/clientes',   label: 'Clientes',   icon: '👥' },
     { path: '/cobranças',  label: 'Cobranças',  icon: '🔔', badge: pendentes > 0 ? pendentes : null },
+    { path: '/historico',  label: 'Histórico',  icon: '📋' },
   ]
 
   const Sidebar = () => (

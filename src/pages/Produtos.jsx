@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import { registrarLog } from '../logger'
 
 const CATEGORIAS_BASE = ['terço', 'escapulário', 'pulseira', 'chaveiro', 'medalhão', 'kit', 'outros']
 
@@ -294,6 +295,7 @@ export default function Produtos() {
     }
     if (error) { showMsg('Erro: ' + error.message, 'danger') }
     else {
+      await registrarLog({ acao: editando ? 'editou' : 'cadastrou', modulo: 'produtos', descricao: `${editando ? 'Editou' : 'Cadastrou'} produto "${payload.nome}" · custo ${fmt(payload.custo)} · venda ${fmt(payload.preco_venda)}` })
       showMsg(editando ? 'Produto atualizado!' : 'Produto cadastrado!', 'success')
       fecharModal()
       loadProdutos()
@@ -303,22 +305,30 @@ export default function Produtos() {
 
   async function arquivar(id) {
     if (!confirm('Arquivar este produto? Ele ficará oculto mas o histórico é preservado.')) return
+    const prod = produtos.find(p => p.id === id)
     await supabase.from('produtos').update({ ativo: false }).eq('id', id)
+    await registrarLog({ acao: 'arquivou', modulo: 'produtos', descricao: `Arquivou produto "${prod?.nome}"`, referencia_id: id })
     showMsg('Produto arquivado.', 'success')
     loadProdutos()
   }
 
   async function restaurar(id) {
+    const prod = arquivados.find(p => p.id === id)
     await supabase.from('produtos').update({ ativo: true }).eq('id', id)
+    await registrarLog({ acao: 'restaurou', modulo: 'produtos', descricao: `Restaurou produto "${prod?.nome}"`, referencia_id: id })
     showMsg('Produto restaurado!', 'success')
     loadProdutos()
   }
 
   async function excluir(id) {
     if (!confirm('⚠️ Excluir permanentemente? Esta ação não pode ser desfeita.')) return
+    const prod = [...produtos, ...arquivados].find(p => p.id === id)
     const { error } = await supabase.from('produtos').delete().eq('id', id)
     if (error) { showMsg('Não foi possível excluir — pode haver vendas ou compras vinculadas. Arquive em vez disso.', 'danger') }
-    else { showMsg('Produto excluído.', 'success'); loadProdutos() }
+    else {
+      await registrarLog({ acao: 'excluiu', modulo: 'produtos', descricao: `Excluiu produto "${prod?.nome}" permanentemente` })
+      showMsg('Produto excluído.', 'success'); loadProdutos()
+    }
   }
 
   function showMsg(text, type = 'success') { setMsg({ text, type }); setTimeout(() => setMsg(null), 4000) }

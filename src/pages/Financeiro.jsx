@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import { registrarLog } from '../logger'
 
 const CATEGORIAS_ENTRADA = ['venda', 'outra receita']
 const CATEGORIAS_SAIDA   = ['compra', 'embalagem', 'frete', 'marketing', 'despesa fixa', 'outra despesa']
@@ -73,6 +74,7 @@ export default function Financeiro() {
     if (error) {
       showMsg('Erro: ' + error.message, 'danger')
     } else {
+      await registrarLog({ acao: 'registrou', modulo: 'financeiro', descricao: `Lançamento manual · ${form.tipo === 'entrada' ? '↑ Entrada' : '↓ Saída'} · ${form.categoria} · R$ ${Number(form.valor).toFixed(2)} · ${form.descricao}` })
       showMsg('Lançamento registrado!', 'success')
       setModal(false)
       setForm(emptyForm)
@@ -83,7 +85,9 @@ export default function Financeiro() {
 
   async function excluir(id) {
     if (!confirm('Excluir este lançamento?')) return
+    const lanc = lancamentos.find(l => l.id === id)
     await supabase.from('financeiro').delete().eq('id', id)
+    await registrarLog({ acao: 'excluiu', modulo: 'financeiro', descricao: `Excluiu lançamento "${lanc?.descricao}" · R$ ${Number(lanc?.valor).toFixed(2)}` })
     loadLancamentos()
   }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
+import { registrarLog } from '../logger'
 
 const CATEGORIAS = ['terço', 'escapulário', 'pulseira', 'chaveiro', 'medalhão', 'kit', 'outros']
 
@@ -171,6 +172,7 @@ export default function Compras() {
         }
         await supabase.from('financeiro').update({ valor: totalCompra, descricao: `Compra: ${itens.map(i => i.nome).join(', ')} · Fornecedor: ${fornecedor || 'Não informado'}` }).eq('referencia_id', editandoCompra.id)
         showMsg('Compra atualizada!', 'success')
+        await registrarLog({ acao: 'editou', modulo: 'compras', descricao: `Compra editada · ${itens.map(i => `${i.quantidade}x ${i.nome}`).join(', ')} · ${fmt(totalCompra)}`, referencia_id: editandoCompra.id })
       } else {
         const { data: compra, error: errCompra } = await supabase.from('compras').insert({ fornecedor: fornecedor.trim() || 'Não informado', total: totalCompra, observacao }).select().single()
         if (errCompra) throw errCompra
@@ -182,6 +184,7 @@ export default function Compras() {
         }
         await supabase.from('financeiro').insert({ tipo: 'saida', categoria: 'compra', descricao: `Compra: ${itens.map(i => i.nome).join(', ')} · Fornecedor: ${fornecedor || 'Não informado'}`, valor: totalCompra, referencia_id: compra.id })
         showMsg('Compra registrada! Estoque atualizado. 📦', 'success')
+        await registrarLog({ acao: 'registrou', modulo: 'compras', descricao: `Compra de ${itens.map(i => `${i.quantidade}x ${i.nome}`).join(', ')} · ${fmt(totalCompra)} · Fornecedor: ${fornecedor || 'não informado'}`, referencia_id: compra.id })
       }
       setModal(false)
       loadAll()
@@ -203,6 +206,7 @@ export default function Compras() {
       await supabase.from('movimentacoes').delete().eq('referencia_id', compra.id)
       await supabase.from('compras').delete().eq('id', compra.id)
       showMsg('Compra excluída e estoque ajustado.', 'success')
+      await registrarLog({ acao: 'excluiu', modulo: 'compras', descricao: `Compra excluída · ${compra.itens_compra?.map(i => i.produtos?.nome).join(', ')} · ${fmt(compra.total)}`, referencia_id: compra.id })
       loadAll()
     } catch (e) {
       showMsg('Erro ao excluir: ' + e.message, 'danger')

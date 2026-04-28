@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import { registrarLog } from '../logger'
 
 const emptyForm = {
   nome: '', telefone: '', endereco: '', cpf: '', data_nascimento: '', observacao: ''
@@ -83,15 +84,22 @@ export default function Clientes() {
     }
 
     if (error) { showMsg('Erro: ' + error.message, 'danger') }
-    else { showMsg(editando ? 'Cliente atualizado!' : 'Cliente cadastrado!', 'success'); fecharModal(); loadClientes() }
+    else {
+      await registrarLog({ acao: editando ? 'editou' : 'cadastrou', modulo: 'clientes', descricao: `${editando ? 'Editou' : 'Cadastrou'} cliente "${payload.nome}" · ${payload.telefone}` })
+      showMsg(editando ? 'Cliente atualizado!' : 'Cliente cadastrado!', 'success'); fecharModal(); loadClientes()
+    }
     setSalvando(false)
   }
 
   async function excluir(id) {
     if (!confirm('Excluir este cliente permanentemente?')) return
+    const cli = clientes.find(c => c.id === id)
     const { error } = await supabase.from('clientes').delete().eq('id', id)
     if (error) { showMsg('Erro ao excluir: ' + error.message, 'danger') }
-    else { showMsg('Cliente excluído.', 'success'); loadClientes() }
+    else {
+      await registrarLog({ acao: 'excluiu', modulo: 'clientes', descricao: `Excluiu cliente "${cli?.nome}"` })
+      showMsg('Cliente excluído.', 'success'); loadClientes()
+    }
   }
 
   function showMsg(text, type = 'success') { setMsg({ text, type }); setTimeout(() => setMsg(null), 4000) }

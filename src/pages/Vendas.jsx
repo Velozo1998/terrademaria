@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
+import { registrarLog } from '../logger'
 
 export default function Vendas() {
   const [vendas, setVendas] = useState([])
@@ -264,6 +265,7 @@ export default function Vendas() {
           await supabase.from('financeiro').delete().eq('referencia_id', editandoVenda.id)
         }
         showMsg('Venda atualizada!', 'success')
+        await registrarLog({ acao: 'editou', modulo: 'vendas', descricao: `Venda editada · ${carrinho.map(i => `${i.quantidade}x ${i.nome}`).join(', ')} · ${fmt(totalCarrinho)}`, referencia_id: editandoVenda.id })
       } else {
         const { data: venda, error: errVenda } = await supabase.from('vendas').insert(payload).select().single()
         if (errVenda) throw errVenda
@@ -294,6 +296,7 @@ export default function Vendas() {
           observacao,
         })
         showMsg(tipoPagamento === 'prazo' ? 'Venda a prazo registrada! 📋' : 'Venda registrada! 🎉', 'success')
+        await registrarLog({ acao: 'registrou', modulo: 'vendas', descricao: `Venda de ${carrinho.map(i => `${i.quantidade}x ${i.nome}`).join(', ')} · ${fmt(totalCarrinho)} · ${tipoPagamento === 'prazo' ? 'a prazo' : 'à vista'}`, referencia_id: venda.id })
       }
       setModal(false)
       loadAll()
@@ -315,6 +318,7 @@ export default function Vendas() {
       await supabase.from('movimentacoes').delete().eq('referencia_id', venda.id)
       await supabase.from('vendas').delete().eq('id', venda.id)
       showMsg('Venda excluída e estoque restaurado.', 'success')
+      await registrarLog({ acao: 'excluiu', modulo: 'vendas', descricao: `Venda excluída · ${venda.itens_venda?.map(i => i.produtos?.nome).join(', ')} · ${fmt(venda.total)}`, referencia_id: venda.id })
       loadAll()
     } catch (e) {
       showMsg('Erro ao excluir: ' + e.message, 'danger')
@@ -327,6 +331,7 @@ export default function Vendas() {
     const { error } = await supabase.from('vendas').update({ cliente_id: clienteVincular.id }).eq('id', vendaVincular.id)
     if (error) return showMsg('Erro: ' + error.message, 'danger')
     showMsg(`Cliente ${clienteVincular.nome} vinculado!`, 'success')
+    await registrarLog({ acao: 'vinculou', modulo: 'vendas', descricao: `Cliente ${clienteVincular.nome} vinculado à venda`, referencia_id: vendaVincular.id })
     setModalVincular(false)
     setVendaVincular(null)
     setClienteVincular(null)

@@ -11,6 +11,7 @@ import Estoque from './pages/Estoque'
 import Financeiro from './pages/Financeiro'
 import Clientes from './pages/Clientes'
 import Cobranças from './pages/Cobranças'
+import Historico from './pages/Historico'
 
 function RotaProtegida({ user, children }) {
   if (user === undefined) {
@@ -57,6 +58,7 @@ export default function App() {
           <Route path="financeiro" element={<Financeiro />} />
           <Route path="clientes" element={<Clientes />} />
           <Route path="cobranças" element={<Cobranças />} />
+          <Route path="historico" element={<Historico />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
