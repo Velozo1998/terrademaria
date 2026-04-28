@@ -1,5 +1,8 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { supabase } from './supabase'
 import Layout from './components/Layout'
+import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Produtos from './pages/Produtos'
 import Vendas from './pages/Vendas'
@@ -9,11 +12,43 @@ import Financeiro from './pages/Financeiro'
 import Clientes from './pages/Clientes'
 import Cobranças from './pages/Cobranças'
 
+function RotaProtegida({ user, children }) {
+  if (user === undefined) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column', gap: 12 }}>
+        <div style={{ width: 36, height: 36, border: '3px solid #F5F1EC', borderTop: '3px solid #C8A96A', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
+  if (!user) return <Navigate to="/login" replace />
+  return children
+}
+
 export default function App() {
+  const [user, setUser] = useState(undefined)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
   return (
     <BrowserRouter basename="/terrademaria">
       <Routes>
-        <Route path="/" element={<Layout />}>
+        <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
+        <Route path="/" element={
+          <RotaProtegida user={user}>
+            <Layout user={user} />
+          </RotaProtegida>
+        }>
           <Route index element={<Dashboard />} />
           <Route path="produtos" element={<Produtos />} />
           <Route path="vendas" element={<Vendas />} />
@@ -23,6 +58,7 @@ export default function App() {
           <Route path="clientes" element={<Clientes />} />
           <Route path="cobranças" element={<Cobranças />} />
         </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   )
